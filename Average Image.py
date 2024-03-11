@@ -31,7 +31,7 @@ image_5 = sitk.GetArrayViewFromImage(atlas_5)
 image_shape = image_1.shape
 
 #Creating an empty array which intializes our new atlas image
-combined_atlas = np.zeros((image_shape[0], image_shape[1], image_shape[2]), dtype=int)
+combined_atlas = np.zeros((image_shape[0], image_shape[1], image_shape[2]), dtype=np.int16)
 value_list = np.zeros(5, dtype = int)
 
 #Looking at every pixel based on the pixel values for each images, assign new value.
@@ -45,7 +45,7 @@ for i in range(0, image_shape[0]):
             value_list[3] = image_4[i,j,k]
             value_list[4] = image_5[i,j,k]
             
-            combined_atlas[i,j,k] = (sum(value_list))/len(value_list)
+            combined_atlas[i,j,k] = np.uint8((sum(value_list))/len(value_list))
             
             value_list = np.zeros(5, dtype = int)
 
@@ -95,4 +95,4 @@ plt.axis('off')
 
 #Writing the obtained atlas into an MHD file
 atlas_mhd = sitk.GetImageFromArray(combined_atlas)
-sitk.WriteImage(atlas_mhd, "average_value_atlas_v2.mhd")
+sitk.WriteImage(atlas_mhd, "average_value_atlas_v2.mhd", useCompression = True)
