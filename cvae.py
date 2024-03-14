@@ -63,12 +63,12 @@ class Encoder(nn.Module):
         hold the number of input channels for each encoder block
     """
 
-    def __init__(self, spatial_size=[64, 64], z_dim=256, chs=(1, 64, 128, 256)):
+    def __init__(self, spatial_size=[64, 64], z_dim=256, chs=(2, 64, 128, 256)):
         super().__init__()
         # convolutional blocks
         self.enc_blocks = nn.ModuleList(
             # TODO
-            [Block(chs[i]+1, chs[i + 1]) for i in range(len(chs) - 1)]
+            [Block(chs[i], chs[i + 1]) for i in range(len(chs) - 1)]
         )
         # max pooling
         self.pool = nn.MaxPool2d(2) # TODO
@@ -94,20 +94,19 @@ class Encoder(nn.Module):
             latent distribution
         """
         # Expand segmentation labels to match the number of channels in the input images
-        #expanded_seg_labels = seg_labels.expand(-1, x.size(1), -1, -1)
+        
+        expanded_seg_labels = seg_labels.expand(-1, x.size(1), -1, -1)
         # Adjust the number of channels in expanded_seg_labels to match the number of channels in x
         #expanded_seg_labels = expanded_seg_labels[:, :x.size(1), :, :]
         # Concatenate inputs with expanded segmentation labels along the channel dimension
-        concatenated_inputs = torch.cat((x, expanded_seg_labels), dim=1)
-        print(concatenated_inputs.shape)
-        
-        for block in self.enc_blocks:     
-            # TODO: conv block  
-            #x=torch.cat((x,seg_labels),dim=1)
-            x= block(concatenated_inputs)
-            # TODO: pooling 
-            x=self.pool(x)
+        x = torch.cat((x, expanded_seg_labels), dim=1)
+        for block in self.enc_blocks:
             print(x.shape)
+            x= block(x)
+            print(x.shape)
+            x=self.pool(x)
+
+            
         # TODO: output layer
         x = self.out(x)          
         return torch.chunk(x, 2, dim=1)  # 2 chunks, 1 each for mu and logvar
@@ -167,9 +166,10 @@ class Generator(nn.Module):
         
         """
         #z=torch.cat((z,seg_labels),dim=1)
-        
+        print(z.shape)
+        print(seg_labels.shape)
         # Expand segmentation labels to match the number of channels in the input images
-        #expanded_seg_labels = seg_labels.expand(-1, z.size(1), -1, -1)
+        expanded_seg_labels = seg_labels.expand(-1, z.size(1), -1, -1)
         # Concatenate inputs with expanded segmentation labels along the channel dimension
         concatenated_inputs = torch.cat((z, expanded_seg_labels), dim=1)
         z= concatenated_inputs
@@ -228,8 +228,8 @@ class CVAE(nn.Module):
         #print("Expanded segmentation labels shape:", seg_labels.shape)
         
         mu, logvar = self.encoder(x,seg_labels)
-        latent_z = sample_z(mu, logvar)
         
+        latent_z = sample_z(mu, logvar)
         output = self.generator(latent_z,seg_labels)
         
         return output, mu, logvar
