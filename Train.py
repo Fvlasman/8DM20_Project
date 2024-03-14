@@ -13,10 +13,11 @@ TRANSFORMIX_PATH = os.path.join(elastics_dir, r'transformix.exe')
 parameter_path = (r'C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - Capita '
                   r'selecta\ImagesforPractical\ImagesforPractical\chest_xrays')
 
-atlas_path = r'C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - Capita selecta\TrainingData\TrainingData\p102'
-training_path = r'C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - Capita selecta\TrainingData\TrainingData'
-
-atlas_image = sitk.ReadImage(os.path.join(atlas_path, 'mr_bffe.mhd'))
+atlas_path = r"C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - Capita selecta\TrainingData\atlas"
+training_path = r"C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - Capita selecta\TrainingData"
+test_path = os.path.join(atlas_path, 'atlas_mr_bffe.mhd')
+print(os.path.join(atlas_path, "atlas_prostaat.mhd"))
+atlas_image = sitk.ReadImage(os.path.join(atlas_path, "atlas_prostaat_7.mhd"))
 image_array = sitk.GetArrayFromImage(atlas_image)
 
 # plt.imshow(image_array[:, :, 2], cmap='gray')
@@ -33,21 +34,18 @@ scores = []
 
 directories = os.listdir(training_path)
 
-for dir in directories[1:]:
+for dir in directories[2:]:
     dir_path = os.path.join(training_path, dir)
     moving_image = sitk.ReadImage(os.path.join(dir_path, 'mr_bffe.mhd'))
     el.register(
         fixed_image=os.path.join(dir_path, 'mr_bffe.mhd'),
-        moving_image=os.path.join(atlas_path, 'mr_bffe.mhd'),
+        moving_image=os.path.join(atlas_path, 'atlas_mr_bffe_7.mhd'),
         parameters=[os.path.join(parameter_path, 'parameterswithpenalty.txt')],
         output_dir='results')
-    for i in range(5):
-        log_path = os.path.join('results', 'IterationInfo.0.R{}.txt'.format(i))
-        log = elastix.logfile(log_path)
     tr = elastix.TransformixInterface(parameters=transform_path,
                                       transformix_path=TRANSFORMIX_PATH)
     # Transform a new image with the transformation parameters
-    tr.transform_image(os.path.join(atlas_path, 'prostaat.mhd'), output_dir=r'results')
+    tr.transform_image(os.path.join(atlas_path, 'atlas_prostaat_7.mhd'), output_dir=r'results')
     predicted_prostate = sitk.ReadImage(os.path.join(r'C:\Users\fvlas\OneDrive - TU Eindhoven\vakken TUE\8DM20 - '
                                                      r'Capita selecta\python\results', 'result.mhd'))
     predicted_prostate_array = sitk.GetArrayFromImage(predicted_prostate)
