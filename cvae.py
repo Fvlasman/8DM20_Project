@@ -7,7 +7,26 @@ Created on Wed Mar 13 10:55:24 2024
 import torch
 import torch.nn as nn
 
+import torch.nn.functional as F
 l1_loss = torch.nn.L1Loss()
+
+class SPADE(nn.Module):
+    def __init__(self, in_channels, seg_channels, out_channels):
+        super(SPADE, self).__init__()
+        self.norm = nn.InstanceNorm2d(in_channels, affine=False)
+        self.seg_embed = nn.Conv2d(seg_channels, in_channels, kernel_size=3, padding=1)
+        self.gamma = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.beta = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+    def forward(self, x, seg_map):
+        # Convert input tensor to float
+        x = x.float()
+        normalized = self.norm(x)
+        seg_embedding = F.relu(self.seg_embed(seg_map.float()))
+        gamma = self.gamma(seg_embedding.float())  # Convert gamma to float
+        beta = self.beta(seg_embedding.float())    # Convert beta to float
+        out = gamma * normalized + beta
+        return out
 
 
 class Block(nn.Module):
@@ -93,22 +112,14 @@ class Encoder(nn.Module):
             a tensor with the means and a tensor with the log variances of the
             latent distribution
         """
-        # Expand segmentation labels to match the number of channels in the input images
+        x = torch.cat((x, seg_labels), dim=1)
         
-        expanded_seg_labels = seg_labels.expand(-1, x.size(1), -1, -1)
-        # Adjust the number of channels in expanded_seg_labels to match the number of channels in x
-        #expanded_seg_labels = expanded_seg_labels[:, :x.size(1), :, :]
-        # Concatenate inputs with expanded segmentation labels along the channel dimension
-        x = torch.cat((x, expanded_seg_labels), dim=1)
-        for block in self.enc_blocks:
-            print(x.shape)
+        for block in self.enc_blocks:     
             x= block(x)
-            print(x.shape)
+            # TODO: pooling 
             x=self.pool(x)
-
-            
         # TODO: output layer
-        x = self.out(x)          
+        x = self.out(x)  
         return torch.chunk(x, 2, dim=1)  # 2 chunks, 1 each for mu and logvar
 
 
@@ -127,13 +138,14 @@ class Generator(nn.Module):
         width of image at lowest resolution level, by default 8    
     """
 
-    def __init__(self, z_dim=256, chs=(256, 128, 64, 32), h=8, w=8):
+    def __init__(self, z_dim=256, chs=(256, 128, 64, 32), h=8, w=8,seg_channels=1):
 
         super().__init__()
         self.chs = chs
         self.h = h  
         self.w = w  
-        self.z_dim = z_dim  
+        self.z_dim = z_dim 
+        self.seg_channels = seg_channels
         self.proj_z = nn.Linear(
             self.z_dim, self.chs[0] * self.h * self.w
         )  # fully connected layer on latent space
@@ -143,8 +155,10 @@ class Generator(nn.Module):
 
         self.upconvs = nn.ModuleList(
             # TODO: transposed convolution  
-            [nn.ConvTranspose2d(chs[i]+1, chs[i], 2,2) for i in range(len(chs)-1)]
+            [nn.ConvTranspose2d(chs[i], chs[i], 2,2) for i in range(len(chs)-1)]
         )
+        #spade layer
+        self.spades = nn.ModuleList([SPADE(chs[i], seg_channels, chs[i]) for i in range(len(chs) - 1)])
 
         self.dec_blocks = nn.ModuleList(
             # TODO: conv block
@@ -165,23 +179,22 @@ class Generator(nn.Module):
         x : torch.Tensor
         
         """
-        #z=torch.cat((z,seg_labels),dim=1)
-        print(z.shape)
-        print(seg_labels.shape)
-        # Expand segmentation labels to match the number of channels in the input images
-        expanded_seg_labels = seg_labels.expand(-1, z.size(1), -1, -1)
-        # Concatenate inputs with expanded segmentation labels along the channel dimension
-        concatenated_inputs = torch.cat((z, expanded_seg_labels), dim=1)
-        z= concatenated_inputs
+        #concatenated_inputs = torch.cat((z, seg_labels), dim=1)
+        #z= concatenated_inputs
         
         x = self.proj_z(z)# TODO: fully connected layer
         x = self.reshape(x)# TODO: reshape to image dimensions
         for i in range(len(self.chs) - 1):
             # TODO: transposed convolution
             x = self.upconvs[i](x)
+            
+            #spade layer
+            x = self.spades[i](x, seg_labels)
+            
             # TODO: convolutional block
             x = self.dec_blocks[i](x)
         return self.head(x)
+    
 
 
 class CVAE(nn.Module):
@@ -228,8 +241,8 @@ class CVAE(nn.Module):
         #print("Expanded segmentation labels shape:", seg_labels.shape)
         
         mu, logvar = self.encoder(x,seg_labels)
-        
         latent_z = sample_z(mu, logvar)
+        
         output = self.generator(latent_z,seg_labels)
         
         return output, mu, logvar
