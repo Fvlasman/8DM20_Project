@@ -38,7 +38,7 @@ TENSORBOARD_LOGDIR = "vae_runs"
 NO_VALIDATION_PATIENTS = 2
 IMAGE_SIZE = [64, 64]
 BATCH_SIZE = 32
-N_EPOCHS = 2
+N_EPOCHS = 200
 DECAY_LR_AFTER = 50
 LEARNING_RATE = 1e-4
 DISPLAY_FREQ = 10
@@ -139,12 +139,28 @@ for epoch in range(N_EPOCHS):
         writer.add_image(
             "Real_fake", np.clip(img_grid[0][np.newaxis], -1, 1) / 2 + 0.5, epoch + 1
         )
-        
-    # TODO: sample noise 
-    noise = cvae.get_noise(5, Z_DIM, device=device)
-    # TODO: generate images and display
+    print("\tEpoch", epoch + 1, "\tTraining Loss: ", current_train_loss)
+       
+    # # TODO: sample noise 
+    # noise = cvae.get_noise(5, Z_DIM, device=device)
+    # # TODO: generate images and display
     
     
+    # with torch.no_grad():
+    #     cvae_model.eval()
+    #     #fake_images, mu, logvar=vae_model(noise)
+    #     gen = cvae.Generator()
+    #     fake_images=gen(noise,seg_labels[:5].to(device))#have to adjust these segmentations
+    #     #img_grid = make_grid(fake_images, nrow=5, padding=12, pad_value=-1)
+    #     plt.figure()
+    #     plt.imshow(fake_images[0,0,:,:],cmap = "gray")
+    #     plt.show()
+
+
+torch.save(cvae_model.state_dict(), CHECKPOINTS_DIR / "cvae_model.pth")
+
+#%%
+def generate_image(noise, generated_seg, cvae_model):
     with torch.no_grad():
         cvae_model.eval()
         #fake_images, mu, logvar=vae_model(noise)
@@ -154,6 +170,11 @@ for epoch in range(N_EPOCHS):
         plt.figure()
         plt.imshow(fake_images[0,0,:,:],cmap = "gray")
         plt.show()
+        
+    
+# TODO: sample noise 
+generated_seg=seg_labels[:5]
+len_gen_seg=len(generated_seg)
+noise = cvae.get_noise(len_gen_seg, Z_DIM, device=device)
 
-
-torch.save(cvae_model.state_dict(), CHECKPOINTS_DIR / "cvae_model.pth")
+generate_image(noise, generated_seg, cvae_model)

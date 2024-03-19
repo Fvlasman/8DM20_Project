@@ -8,29 +8,9 @@ import torch
 import torch.nn as nn
 
 import torch.nn.functional as F
-#from torch.nn.utils import spectral_norm
+
 
 l1_loss = torch.nn.L1Loss()
-
-class SPADE(nn.Module):
-    def __init__(self, num_features, seg_channels):
-        super(SPADE, self).__init__()
-        
-        self.norm = nn.InstanceNorm2d(num_features, affine=False)
-        self.gamma_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
-        self.beta_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
-        
-    def forward(self, x, segmap):
-        normalized = self.norm(x.float())
-        gamma = self.gamma_conv(segmap.float())
-        beta = self.beta_conv(segmap.float())
-        
-        # Resize gamma and beta to match the spatial dimensions of normalized input
-        gamma = F.interpolate(gamma, size=normalized.size()[2:], mode='nearest')
-        beta = F.interpolate(beta, size=normalized.size()[2:], mode='nearest')
-        
-        return normalized * (1 + gamma) + beta
-
 
 class Block(nn.Module):
     """Basic convolutional building block
@@ -71,6 +51,24 @@ class Block(nn.Module):
         x=self.bn2(x)
         return x
 
+class SPADE(nn.Module):
+    def __init__(self, num_features, seg_channels):
+        super(SPADE, self).__init__()
+        
+        self.norm = nn.InstanceNorm2d(num_features, affine=False)
+        self.gamma_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
+        self.beta_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
+        
+    def forward(self, x, segmap):
+        normalized = self.norm(x.float())
+        gamma = self.gamma_conv(segmap.float())
+        beta = self.beta_conv(segmap.float())
+        
+        # Resize gamma and beta to match the spatial dimensions of normalized input
+        gamma = F.interpolate(gamma, size=normalized.size()[2:], mode='nearest')
+        beta = F.interpolate(beta, size=normalized.size()[2:], mode='nearest')
+        
+        return normalized * (1 + gamma) + beta
 
 class Encoder(nn.Module):
     """The encoder part of the VAE.
@@ -293,20 +291,6 @@ def kld_loss(mu, logvar):
     """
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-def conditional_loss_function(inputs, recons, mu, logvar, seg_labels, beta=1.0):
-    # Reconstruction loss
-   recon_loss = l1_loss(inputs, recons)
-   
-   # Conditional KL divergence loss
-   kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-   
-   # Condition the KL divergence loss on segmentation labels
-   kld_loss_conditional = kld_loss * seg_labels.mean()
-   
-   # Total loss
-   total_loss = recon_loss + beta * kld_loss_conditional
-   
-   return total_loss
 
 def cvae_loss(inputs, recons, mu, logvar, seg_labels):
     """Computes the VAE loss, sum of reconstruction and KLD loss
@@ -330,6 +314,21 @@ def cvae_loss(inputs, recons, mu, logvar, seg_labels):
     
     return l1_loss(inputs, recons) + kld_loss(mu, logvar) #+ conditional_loss_function(inputs, recons,mu, logvar, seg_labels)
 
+
+# def conditional_loss_function(inputs, recons, mu, logvar, seg_labels, beta=1.0):
+#     # Reconstruction loss
+#    recon_loss = l1_loss(inputs, recons)
+   
+#    # Conditional KL divergence loss
+#    kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+   
+#    # Condition the KL divergence loss on segmentation labels
+#    kld_loss_conditional = kld_loss * seg_labels.mean()
+   
+#    # Total loss
+#    total_loss = recon_loss + beta * kld_loss_conditional
+   
+#    return total_loss
 
 # class SPADE2(nn.Module):
 #     def __init__(self, in_channels, seg_channels, out_channels):
