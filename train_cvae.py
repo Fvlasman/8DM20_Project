@@ -109,6 +109,7 @@ for epoch in range(N_EPOCHS):
         optimizer.zero_grad()
         
         output, mu, logvar=cvae_model(inputs.to(device),seg_labels.to(device))
+        #cvae_loss(inputs, recons, mu, logvar, seg_labels)
         loss=cvae.cvae_loss(inputs.to(device),output.to(device), mu, logvar,seg_labels.to(device))
         loss.backward()
         optimizer.step()
@@ -119,7 +120,7 @@ for epoch in range(N_EPOCHS):
         cvae_model.eval()
         # TODO
         for inputs, seg_labels in valid_dataloader:
-            output, mu, logvar=cvae_model(inputs.to(device))
+            output, mu, logvar=cvae_model(inputs.to(device),seg_labels.to(device))
             loss=cvae.cvae_loss(inputs.to(device),output.to(device), mu, logvar, seg_labels.to(device))
             current_valid_loss += loss.item()
         cvae_model.train()
@@ -148,7 +149,7 @@ for epoch in range(N_EPOCHS):
         cvae_model.eval()
         #fake_images, mu, logvar=vae_model(noise)
         gen = cvae.Generator()
-        fake_images=gen(noise,seg_labels[:,5].to(device))#have to adjust these segmentations
+        fake_images=gen(noise,seg_labels[:5].to(device))#have to adjust these segmentations
         #img_grid = make_grid(fake_images, nrow=5, padding=12, pad_value=-1)
         plt.figure()
         plt.imshow(fake_images[0,0,:,:],cmap = "gray")
