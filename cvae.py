@@ -7,8 +7,10 @@ Created on Wed Mar 13 10:55:24 2024
 import torch
 import torch.nn as nn
 
-l1_loss = torch.nn.L1Loss()
+import torch.nn.functional as F
 
+
+l1_loss = torch.nn.L1Loss()
 
 class Block(nn.Module):
     """Basic convolutional building block
@@ -49,6 +51,24 @@ class Block(nn.Module):
         x=self.bn2(x)
         return x
 
+class SPADE(nn.Module):
+    def __init__(self, num_features, seg_channels):
+        super(SPADE, self).__init__()
+        
+        self.norm = nn.InstanceNorm2d(num_features, affine=False)
+        self.gamma_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
+        self.beta_conv = nn.Conv2d(seg_channels, num_features, kernel_size=3, padding=1)
+        
+    def forward(self, x, segmap):
+        normalized = self.norm(x.float())
+        gamma = self.gamma_conv(segmap.float())
+        beta = self.beta_conv(segmap.float())
+        
+        # Resize gamma and beta to match the spatial dimensions of normalized input
+        gamma = F.interpolate(gamma, size=normalized.size()[2:], mode='nearest')
+        beta = F.interpolate(beta, size=normalized.size()[2:], mode='nearest')
+        
+        return normalized * (1 + gamma) + beta
 
 class Encoder(nn.Module):
     """The encoder part of the VAE.
@@ -93,22 +113,14 @@ class Encoder(nn.Module):
             a tensor with the means and a tensor with the log variances of the
             latent distribution
         """
-        # Expand segmentation labels to match the number of channels in the input images
+        x = torch.cat((x, seg_labels), dim=1)
         
-        expanded_seg_labels = seg_labels.expand(-1, x.size(1), -1, -1)
-        # Adjust the number of channels in expanded_seg_labels to match the number of channels in x
-        #expanded_seg_labels = expanded_seg_labels[:, :x.size(1), :, :]
-        # Concatenate inputs with expanded segmentation labels along the channel dimension
-        x = torch.cat((x, expanded_seg_labels), dim=1)
-        for block in self.enc_blocks:
-            print(x.shape)
+        for block in self.enc_blocks:     
             x= block(x)
-            print(x.shape)
+            # TODO: pooling 
             x=self.pool(x)
-
-            
         # TODO: output layer
-        x = self.out(x)          
+        x = self.out(x)  
         return torch.chunk(x, 2, dim=1)  # 2 chunks, 1 each for mu and logvar
 
 
@@ -127,13 +139,14 @@ class Generator(nn.Module):
         width of image at lowest resolution level, by default 8    
     """
 
-    def __init__(self, z_dim=256, chs=(256, 128, 64, 32), h=8, w=8):
+    def __init__(self, z_dim=256, chs=(256, 128, 64, 32), h=8, w=8,seg_channels=1):
 
         super().__init__()
         self.chs = chs
         self.h = h  
         self.w = w  
-        self.z_dim = z_dim  
+        self.z_dim = z_dim 
+        self.seg_channels = seg_channels
         self.proj_z = nn.Linear(
             self.z_dim, self.chs[0] * self.h * self.w
         )  # fully connected layer on latent space
@@ -143,12 +156,15 @@ class Generator(nn.Module):
 
         self.upconvs = nn.ModuleList(
             # TODO: transposed convolution  
-            [nn.ConvTranspose2d(chs[i]+1, chs[i], 2,2) for i in range(len(chs)-1)]
+            [nn.ConvTranspose2d(chs[i], chs[i], 2,2) for i in range(len(chs)-1)]
         )
-
+        #spade layer
+        #self.spades = nn.ModuleList([SPADE(chs[i], seg_channels, chs[i+1]) for i in range(len(chs) - 1)])
+        self.spades = nn.ModuleList([SPADE(chs[i], seg_channels) for i in range(len(chs) - 1)])
+        
         self.dec_blocks = nn.ModuleList(
             # TODO: conv block
-            [Block(chs[i]+1, chs[i+1]) for i in range(len(chs) -1)]
+            [Block(chs[i], chs[i+1]) for i in range(len(chs) -1)]
         )
         self.head = nn.Conv2d(chs[-1], 1, kernel_size=3, padding=1)
 
@@ -164,24 +180,18 @@ class Generator(nn.Module):
         -------
         x : torch.Tensor
         
-        """
-        #z=torch.cat((z,seg_labels),dim=1)
-        print(z.shape)
-        print(seg_labels.shape)
-        # Expand segmentation labels to match the number of channels in the input images
-        expanded_seg_labels = seg_labels.expand(-1, z.size(1), -1, -1)
-        # Concatenate inputs with expanded segmentation labels along the channel dimension
-        concatenated_inputs = torch.cat((z, expanded_seg_labels), dim=1)
-        z= concatenated_inputs
-        
+        """               
         x = self.proj_z(z)# TODO: fully connected layer
         x = self.reshape(x)# TODO: reshape to image dimensions
         for i in range(len(self.chs) - 1):
             # TODO: transposed convolution
             x = self.upconvs[i](x)
+            #spade layer
+            x = self.spades[i](x, seg_labels)
             # TODO: convolutional block
             x = self.dec_blocks[i](x)
         return self.head(x)
+    
 
 
 class CVAE(nn.Module):
@@ -221,15 +231,10 @@ class CVAE(nn.Module):
             the mean of the latent distribution
         float
             the log of the variance of the latent distribution
-        """
-        #print("Input shape:", x.shape)
-        #print("Segmentation labels shape:", seg_labels.shape)
-        #seg_labels = seg_labels.expand(x.size(0), -1, -1, -1)
-        #print("Expanded segmentation labels shape:", seg_labels.shape)
-        
+        """        
         mu, logvar = self.encoder(x,seg_labels)
-        
         latent_z = sample_z(mu, logvar)
+        
         output = self.generator(latent_z,seg_labels)
         
         return output, mu, logvar
@@ -286,20 +291,6 @@ def kld_loss(mu, logvar):
     """
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-def conditional_loss_function(inputs, recons, mu, logvar, seg_labels, beta=1.0):
-    # Reconstruction loss
-   recon_loss = l1_loss(inputs, recons)
-   
-   # Conditional KL divergence loss
-   kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-   
-   # Condition the KL divergence loss on segmentation labels
-   kld_loss_conditional = kld_loss * seg_labels.mean()
-   
-   # Total loss
-   total_loss = recon_loss + beta * kld_loss_conditional
-   
-   return total_loss
 
 def cvae_loss(inputs, recons, mu, logvar, seg_labels):
     """Computes the VAE loss, sum of reconstruction and KLD loss
@@ -320,4 +311,89 @@ def cvae_loss(inputs, recons, mu, logvar, seg_labels):
     float
         sum of reconstruction and KLD loss
     """
-    return l1_loss(inputs, recons) + kld_loss(mu, logvar) + conditional_loss_function(mu, logvar, seg_labels)
+    
+    return l1_loss(inputs, recons) + kld_loss(mu, logvar) #+ conditional_loss_function(inputs, recons,mu, logvar, seg_labels)
+
+
+# def conditional_loss_function(inputs, recons, mu, logvar, seg_labels, beta=1.0):
+#     # Reconstruction loss
+#    recon_loss = l1_loss(inputs, recons)
+   
+#    # Conditional KL divergence loss
+#    kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+   
+#    # Condition the KL divergence loss on segmentation labels
+#    kld_loss_conditional = kld_loss * seg_labels.mean()
+   
+#    # Total loss
+#    total_loss = recon_loss + beta * kld_loss_conditional
+   
+#    return total_loss
+
+# class SPADE2(nn.Module):
+#     def __init__(self, in_channels, seg_channels, out_channels):
+#         super(SPADE2, self).__init__()
+#         self.norm = nn.InstanceNorm2d(in_channels, affine=False)
+#         #self.seg_embed = nn.Conv2d(seg_channels, in_channels, kernel_size=3, padding=1)
+#         self.gamma = nn.Conv2d(seg_channels, out_channels, kernel_size=3, padding=1)
+#         self.beta = nn.Conv2d(seg_channels, out_channels, kernel_size=3, padding=1)
+
+#     def forward(self, x, seg_map):
+#         # Convert input tensor to float
+#         x = x.float()
+#         normalized = self.norm(x)
+#         #seg_embedding = F.relu(self.seg_embed(seg_map.float()))
+#         gamma = self.gamma(seg_map.float())  # Convert gamma to float
+#         beta = self.beta(seg_map.float())    # Convert beta to float
+#         out = (1+gamma) * normalized + beta
+#         return out
+
+# class SpadeBN(nn.Module):
+#     def __init__(self, nf):
+#         super(SpadeBN, self).__init__()
+
+#         self.bn = nn.BatchNorm2d(nf, affine=False)
+        
+#         # conv_layer is a fastai function and NormType is a data type which tells 
+#         # which type of Normalization layer to use.
+#         # Documentation at: https://docs.fast.ai/layers.html#conv_layer
+#         self.conv0 = conv_layer(1, 128, norm_type=NormType.Spectral)  
+#         self.conv1 = conv_layer(128, nf, norm_type=NormType.Spectral)
+#         self.conv2 = conv_layer(128, nf, norm_type=NormType.Spectral)
+        
+#     def forward(self, features, mask):
+#         size = features.size()[-2:]
+#         mask = F.interpolate(mask.float(), size=size)
+#         interim_conv = self.conv0(mask)
+#         gamma = self.conv1(interim_conv)
+#         beta = self.conv2(interim_conv)
+#         return (self.bn(features) * gamma) + beta
+
+# class SPADE3(nn.Module):
+#     def __init__(self,  in_channels, seg_channels, out_channels):
+#         super(SPADE,self).__init__()
+#         #num_filters = args.spade_filter
+#         #kernel_size = args.spade_kernel
+#         self.conv = spectral_norm(nn.Conv2d(seg_channels, in_channels, kernel_size=(3,3), padding=1))
+#         self.conv_gamma = spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size=(3,3), padding=1))
+#         self.conv_beta = spectral_norm(nn.Conv2d(out_channels, out_channels, kernel_size=(3, 3), padding=1))
+
+#     def forward(self, x, seg):
+#         N, C, H, W = x.size()
+
+#         sum_channel = torch.sum(x.reshape(N, C, H*W), dim=-1)
+#         mean = sum_channel / (N*H*W)
+#         std = torch.sqrt((sum_channel**2 - mean**2) / (N*H*W))
+
+#         mean = torch.unsqueeze(torch.unsqueeze(mean, -1), -1)
+#         std = torch.unsqueeze(torch.unsqueeze(std, -1), -1)
+#         x = (x - mean) / std
+
+#         seg = F.interpolate(seg, size=(H,W), mode='nearest')
+#         seg = F.relu(self.conv(seg))
+#         seg_gamma = self.conv_gamma(seg)
+#         seg_beta = self.conv_beta(seg)
+
+#         x = torch.matmul(seg_gamma, x) + seg_beta
+
+#         return x

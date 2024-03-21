@@ -16,6 +16,8 @@ from tqdm import tqdm
 
 import utils
 import cvae
+import os
+import SimpleITK as sitk
 
 # to ensure reproducible training/validation split
 random.seed(42)
@@ -97,6 +99,8 @@ optimizer = torch.optim.Adam(cvae_model.parameters(),lr=LEARNING_RATE)# TODO
 # add a learning rate scheduler based on the lr_lambda function
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)# TODO ??
 
+train_losses = []
+valid_losses = []
 # training loop
 writer = SummaryWriter(log_dir=TENSORBOARD_LOGDIR)  # tensorboard summary
 for epoch in range(N_EPOCHS):
@@ -109,6 +113,7 @@ for epoch in range(N_EPOCHS):
         optimizer.zero_grad()
         
         output, mu, logvar=cvae_model(inputs.to(device),seg_labels.to(device))
+        #cvae_loss(inputs, recons, mu, logvar, seg_labels)
         loss=cvae.cvae_loss(inputs.to(device),output.to(device), mu, logvar,seg_labels.to(device))
         loss.backward()
         optimizer.step()
@@ -119,10 +124,21 @@ for epoch in range(N_EPOCHS):
         cvae_model.eval()
         # TODO
         for inputs, seg_labels in valid_dataloader:
-            output, mu, logvar=cvae_model(inputs.to(device))
+            output, mu, logvar=cvae_model(inputs.to(device),seg_labels.to(device))
             loss=cvae.cvae_loss(inputs.to(device),output.to(device), mu, logvar, seg_labels.to(device))
             current_valid_loss += loss.item()
         cvae_model.train()
+        
+        
+    # Calculate average training and validation losses
+    avg_train_loss = current_train_loss / len(dataloader)
+    avg_valid_loss = current_valid_loss / len(valid_dataloader)
+
+    # Append losses to lists
+    train_losses.append(avg_train_loss)
+    valid_losses.append(avg_valid_loss)
+    
+    
     # write to tensorboard log
     writer.add_scalar("Loss/train", current_train_loss / len(dataloader), epoch)
     writer.add_scalar(
@@ -138,21 +154,74 @@ for epoch in range(N_EPOCHS):
         writer.add_image(
             "Real_fake", np.clip(img_grid[0][np.newaxis], -1, 1) / 2 + 0.5, epoch + 1
         )
-        
-    # TODO: sample noise 
-    noise = cvae.get_noise(5, Z_DIM, device=device)
-    # TODO: generate images and display
-    
-    
+    print("\tEpoch", epoch + 1, "\tTraining Loss: ", current_train_loss)
+
+# Plot learning curves
+plt.plot(train_losses, label='Training Loss')
+plt.plot(valid_losses, label='Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.title('Training and Validation Losses')
+plt.legend()
+plt.show()
+
+torch.save(cvae_model.state_dict(), CHECKPOINTS_DIR / "cvae_model2epochs.pth")
+
+#%%
+#Function to generate prostate images with the cvae
+def generate_image(noise, aug_seg, cvae_model):
     with torch.no_grad():
         cvae_model.eval()
         #fake_images, mu, logvar=vae_model(noise)
         gen = cvae.Generator()
-        fake_images=gen(noise,seg_labels[:,5].to(device))#have to adjust these segmentations
-        #img_grid = make_grid(fake_images, nrow=5, padding=12, pad_value=-1)
+        fake_images=gen(noise,aug_seg.to(device))#have to adjust these segmentations
         plt.figure()
         plt.imshow(fake_images[0,0,:,:],cmap = "gray")
         plt.show()
+    return fake_images
+#Function tosave the generate prostate images
+def save_GEN_image_as_mhd(image_array, filename,target_path):
+
+    if not filename.endswith('.mhd'):
+        filename += '.mhd'
+        
+    save_path = os.path.join(target_path, filename)
+    
+    image = sitk.GetImageFromArray(image_array)
+    
+    sitk.WriteImage(image, save_path)
+    
+    return save_path
+
+# load the data augmentated segmentation images
+DATA_DIR_AUG = Path.cwd().parent / "Aug_images"
+
+augmented_images_paths = [
+    path
+    for path in DATA_DIR_AUG.iterdir()
+    if not any(part.startswith(".") for part in path.parts)
+]
+mhd_files = [filename for filename in augmented_images_paths if filename.suffix.lower() == ".mhd"]
+
+dataset2 = utils.GenMRDataset(mhd_files, IMAGE_SIZE)
+dataloader2 = DataLoader(
+    dataset2,
+    batch_size=len(dataset2),
+    shuffle=False,
+    drop_last=True,
+    pin_memory=True,
+)
+
+#make the noise and generate the images and save them
+noise = cvae.get_noise(len(dataset2), Z_DIM, device=device)
+count=0
+target_path = Path.cwd().parent / "Gen_images"
+for seg_label in dataloader2:
+    fake_image=generate_image(noise[count], seg_label, cvae_model)
+    name= f"gen_image{count}.mhd"
+    save_GEN_image_as_mhd(fake_image,name,target_path)
+    count=count+1
 
 
-torch.save(cvae_model.state_dict(), CHECKPOINTS_DIR / "cvae_model.pth")
+
+
