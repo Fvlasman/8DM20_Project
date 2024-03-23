@@ -31,7 +31,7 @@ class ProstateMRDataset(torch.utils.data.Dataset):
                     np.int32
                 )
             )
-
+        #print(self.mask_list[0].dtype())
         # number of patients and slices in the dataset
         self.no_patients = len(self.mr_image_list)
         self.no_slices = self.mr_image_list[0].shape[0]
@@ -150,7 +150,7 @@ class GenMRDataset(torch.utils.data.Dataset):
         # transforms to resize images
         self.img_transform = transforms.Compose(
             [
-                transforms.ToPILImage(mode="I"),
+                transforms.ToPILImage(),
                 transforms.CenterCrop(256),
                 transforms.Resize(img_size),
                 transforms.ToTensor(),
@@ -176,5 +176,9 @@ class GenMRDataset(torch.utils.data.Dataset):
         index : int
             index of the image/segmentation in dataset
         """
+        patient = index // self.no_slices
+        the_slice = index - (patient * self.no_slices)
 
-        return self.img_transform(self.mask_list[index])
+        return self.img_transform((self.mask_list[patient][the_slice, ...] > 0).astype(np.int32))
+    
+  
